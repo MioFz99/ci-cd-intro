@@ -1,0 +1,234 @@
+<!-- ai generated -->
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>TSP Solver</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Leaflet -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    crossorigin=""
+  ></script>
+
+  <!-- Vue 3 -->
+  <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
+
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; }
+    #app { height: 100%; display: grid; grid-template-rows: auto 1fr auto; }
+
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+      padding: .75rem 1rem; border-bottom: 1px solid #e5e7eb; background: #fafafa;
+    }
+    .toolbar h1 { font-size: 1rem; margin: 0 1rem 0 0; font-weight: 600; }
+    .toolbar button {
+      appearance: none; border: 1px solid #d1d5db; background: white; color: #111827;
+      padding: .5rem .75rem; border-radius: .5rem; cursor: pointer;
+    }
+    .toolbar button:hover { background: #f3f4f6; }
+    .toolbar .danger { border-color: #fca5a5; color: #991b1b; }
+    .toolbar .primary { border-color: #93c5fd; background: #2563eb; color: white; }
+    .toolbar .primary:hover { background: #1e40af; }
+    .toolbar .ghost { border-color: #e5e7eb; background: #f9fafb; }
+
+    #map { height: 78vh; width: 100%; }
+    .statusbar {
+      padding: .5rem 1rem; border-top: 1px solid #e5e7eb; background: #fafafa; font-size: .95rem;
+      display: flex; gap: 1rem; align-items: center; justify-content: space-between;
+    }
+    .pill { padding: .25rem .5rem; border-radius: 9999px; background: #eef2ff; color: #3730a3; font-weight: 600; }
+    .note { color: #6b7280; }
+
+    /* kleine Marker-Zahlen */
+    .idx-marker {
+      background: #111827; color: white; border-radius: 9999px; padding: 2px 6px; font-size: 12px; border: 2px solid white;
+      box-shadow: 0 1px 2px rgba(0,0,0,.25);
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="toolbar">
+    <h1>Traveling Salesman Problem Solver</h1>
+    <button class="ghost" @click="undo" :disabled="positions.length===0">Undo</button>
+    <button class="danger" @click="clearAll" :disabled="positions.length===0">Alles löschen</button>
+    <button class="primary" @click="solve" :disabled="positions.length<2 || solving">Solve</button>
+    <span class="note">Karte anklicken, um Punkte (Lon/Lat) hinzuzufügen.</span>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="statusbar">
+    <div>
+      <span class="pill">Punkte: {{ positions.length }}</span>
+      <span v-if="minDistance !== null" class="pill">Distanz: {{ minDistance.toFixed(3) }}</span>
+      <span v-if="minDistance !== null" class="pill">Optimal: {{ optimal ? 'Ja' : 'Nein' }}</span>
+    </div>
+    <div class="note" v-if="error">{{ error }}</div>
+    <div class="note" v-else-if="solving">Löse…</div>
+  </div>
+</div>
+
+<script>
+const { createApp, onMounted, ref } = Vue;
+
+createApp({
+  setup() {
+    const map = ref(null);
+    const positions = ref([]); // {x: lon, y: lat}
+    const markerLayer = ref(null);
+    const routeLayer = ref(null);
+    const solving = ref(false);
+    const minDistance = ref(null);
+    const optimal = ref(false);
+    const error = ref("");
+
+    function initMap() {
+      // Start in Wien (passt zu deiner Zeitzone), Zoom 12
+      map.value = L.map('map').setView([48.2082, 16.3738], 12);
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map.value);
+
+      markerLayer.value = L.layerGroup().addTo(map.value);
+
+      map.value.on('click', (e) => {
+        const lat = e.latlng.lat;
+        const lon = e.latlng.lng;
+        addPoint(lon, lat);
+      });
+    }
+
+    function addPoint(x, y) {
+      positions.value.push({ x, y });
+      drawMarkers();
+    }
+
+    function drawMarkers() {
+      markerLayer.value.clearLayers();
+      positions.value.forEach((p, idx) => {
+        const icon = L.divIcon({
+          className: "idx-marker",
+          html: String(idx + 1),
+          iconSize: [24,24],
+          iconAnchor: [12,12]
+        });
+        L.marker([p.y, p.x], { icon }).addTo(markerLayer.value);
+      });
+    }
+
+    function drawRoute(route) {
+      if (routeLayer.value) {
+        map.value.removeLayer(routeLayer.value);
+        routeLayer.value = null;
+      }
+      if (!route || route.length === 0) return;
+
+      // Leaflet erwartet [lat, lon]
+      const latlngs = route.map(p => [p.y, p.x]);
+
+      // Zyklus schließen, falls nicht geschlossen
+      const first = latlngs[0];
+      const last = latlngs[latlngs.length - 1];
+      if (first[0] !== last[0] || first[1] !== last[1]) {
+        latlngs.push(first);
+      }
+
+      routeLayer.value = L.polyline(latlngs).addTo(map.value);
+      fitAll();
+    }
+
+    function fitAll() {
+      const all = [];
+      positions.value.forEach(p => all.push([p.y, p.x]));
+      if (routeLayer.value) {
+        routeLayer.value.getLatLngs().forEach(ll => all.push([ll.lat, ll.lng]));
+      }
+      if (all.length > 0) {
+        const b = L.latLngBounds(all);
+        map.value.fitBounds(b, { padding: [30, 30] });
+      }
+    }
+
+    function undo() {
+      if (positions.value.length === 0) return;
+      positions.value.pop();
+      drawMarkers();
+      minDistance.value = null;
+      error.value = "";
+    }
+
+    function clearAll() {
+      positions.value = [];
+      drawMarkers();
+      if (routeLayer.value) {
+        map.value.removeLayer(routeLayer.value);
+        routeLayer.value = null;
+      }
+      minDistance.value = null;
+      error.value = "";
+    }
+
+    async function solve() {
+      error.value = "";
+      minDistance.value = null;
+
+      if (positions.value.length < 2) {
+        error.value = "Mindestens zwei Punkte nötig.";
+        return;
+      }
+
+      const payload = { positions: positions.value.map(p => ({ x: p.x, y: p.y })) };
+
+      solving.value = true;
+      try {
+        // Entsprechend deinem OpenAPI ist /solve ein GET mit Request-Body
+        const res = await fetch('/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(`HTTP ${res.status}: ${txt}`);
+        }
+
+        const data = await res.json();
+        // Erwartet: { min_distance: number, route: [{x,y}, ...] }
+        if (!data || !Array.isArray(data.route)) {
+          throw new Error("Unerwartete Antwort vom Server.");
+        }
+
+        minDistance.value = typeof data.min_distance === 'number' ? data.min_distance : null;
+        optimal.value = data.optimal;
+        drawRoute(data.route);
+      } catch (e) {
+        console.error(e);
+        error.value = e.message || String(e);
+      } finally {
+        solving.value = false;
+      }
+    }
+
+    onMounted(() => initMap());
+
+    return {
+      positions, solving, minDistance, error, optimal,
+      undo, clearAll, solve
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

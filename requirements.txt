@@ -1,0 +1,5 @@
+fastapi[standard]
+pydantic
+pytest
+pytest-timeout
+flake8
