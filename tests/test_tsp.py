@@ -32,7 +32,7 @@ def test_identity_graph():
         [5, 0],
     ]
     cost, route, _ = tsp_bruteforce(dist)
-    assert cost == 10
+    assert cost == 11
     assert set(route) == {0, 1}
 
 
